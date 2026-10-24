@@ -20,6 +20,9 @@
 // cl_tent.c -- client side temporary entities
 
 
+#ifdef MISTER_HYBRID
+#include "mister_port.h"
+#endif
 #include "client.h"
 #include "console.h"
 #include "model.h"
@@ -41,6 +44,19 @@ sfx_t* cl_sfx_ric1;
 sfx_t* cl_sfx_ric2;
 sfx_t* cl_sfx_ric3;
 sfx_t* cl_sfx_r_exp3;
+
+
+#ifdef MISTER_HYBRID
+// felt by the player as far as it is from them
+static void CL_RumbleExplosion(const vec3_t pos) {
+    vec3_t d;
+    if (cls.demoplayback || cl.viewentity <= 0) {
+        return;
+    }
+    VectorSubtract(pos, cl_entities[cl.viewentity].origin, d);
+    MiSTer_RumbleExplosion(Length(d));
+}
+#endif
 
 /*
 =================
@@ -187,6 +203,9 @@ void CL_ParseTEnt(void) {
             dl->die = cl.time + 0.5;
             dl->decay = 300;
             S_StartSound(-1, 0, cl_sfx_r_exp3, pos, 1, 1);
+#ifdef MISTER_HYBRID
+            CL_RumbleExplosion(pos);
+#endif
             break;
 
         case TE_TAREXPLOSION: // tarbaby explosion
@@ -194,6 +213,9 @@ void CL_ParseTEnt(void) {
             pos[1] = MSG_ReadCoord();
             pos[2] = MSG_ReadCoord();
             R_BlobExplosion(pos);
+#ifdef MISTER_HYBRID
+            CL_RumbleExplosion(pos);
+#endif
 
             S_StartSound(-1, 0, cl_sfx_r_exp3, pos, 1, 1);
             break;
@@ -237,6 +259,9 @@ void CL_ParseTEnt(void) {
             colorStart = MSG_ReadByte();
             colorLength = MSG_ReadByte();
             R_ParticleExplosion2(pos, colorStart, colorLength);
+#ifdef MISTER_HYBRID
+            CL_RumbleExplosion(pos);
+#endif
             dl = CL_AllocDlight(0);
             VectorCopy(pos, dl->origin);
             dl->radius = 350;

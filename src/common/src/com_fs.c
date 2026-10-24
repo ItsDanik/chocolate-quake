@@ -43,6 +43,10 @@
 //
 
 
+#ifdef MISTER_HYBRID
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
 #include "quakedef.h"
 #include "console.h"
 #include "crc.h"
@@ -644,9 +648,49 @@ Sets com_gamedir, adds the directory to the head of the path,
 then loads and adds pak1.pak, pak2.pak, ...
 ================
 */
+#ifdef MISTER_HYBRID
+/*
+Copies of Quake from its CD or a shop have ID1/PAK0.PAK as often as
+id1/pak0.pak, and the MiSTer's file systems tell them apart. The last part
+of `path`, when there is no such file, is looked for in any case and
+replaced with the name it has.
+*/
+static void COM_FindCase(char* path) {
+    struct stat st;
+    if (stat(path, &st) == 0) {
+        return;
+    }
+    char* name = strrchr(path, '/');
+    if (!name) {
+        return;
+    }
+    *name = 0;
+    DIR* dir = opendir(path[0] ? path : "/");
+    *name++ = '/';
+    if (!dir) {
+        return;
+    }
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (!Q_strcasecmp(entry->d_name, name)) {
+            Q_strcpy(name, entry->d_name);
+            break;
+        }
+    }
+    closedir(dir);
+}
+#endif
+
 static void COM_AddGameDirectory(char* dir) {
     char pakfile[MAX_OSPATH];
 
+#ifdef MISTER_HYBRID
+    char found[MAX_OSPATH];
+    Q_strncpy(found, dir, MAX_OSPATH - 1);
+    found[MAX_OSPATH - 1] = 0;
+    COM_FindCase(found);
+    dir = found;
+#endif
     Q_strcpy(com_gamedir, dir);
 
     //
@@ -662,6 +706,9 @@ static void COM_AddGameDirectory(char* dir) {
     //
     for (i32 i = 0;; i++) {
         sprintf(pakfile, "%s/pak%i.pak", dir, i);
+#ifdef MISTER_HYBRID
+        COM_FindCase(pakfile);
+#endif
         pack_t* pak = COM_LoadPackFile(pakfile);
         if (!pak) {
             break;

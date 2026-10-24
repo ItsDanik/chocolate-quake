@@ -212,7 +212,8 @@ typedef struct {
     i32 surfheight;     // in mipmapped texels
 } drawsurf_t;
 
-extern drawsurf_t r_drawsurf;
+// each thread's own: surfaces are built by the span worker too (d_spanjob.c)
+extern __thread drawsurf_t r_drawsurf;
 
 void R_DrawSurface(void);
 void R_GenTile(msurface_t* psurf, void* pdest);

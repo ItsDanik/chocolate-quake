@@ -24,3 +24,6 @@ target_link_libraries(${LIB} PRIVATE
     sys
     video
 )
+if(MISTER_HYBRID)
+    target_link_libraries(${LIB} PRIVATE mister)
+endif()

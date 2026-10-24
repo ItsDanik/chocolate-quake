@@ -82,7 +82,13 @@ D_InitCaches
 void D_InitCaches(void* buffer, i32 size) {
 
     if (!msg_suppress_1)
+#ifdef MISTER_HYBRID
+        // the OSD's Resolution changes the mode while the game runs: not
+        // a message line every time
+        Con_DPrintf("%ik surface cache\n", size / 1024);
+#else
         Con_Printf("%ik surface cache\n", size / 1024);
+#endif
 
     sc_size = size - GUARDSIZE;
     sc_base = (surfcache_t*) buffer;
@@ -91,6 +97,7 @@ void D_InitCaches(void* buffer, i32 size) {
     sc_base->next = NULL;
     sc_base->owner = NULL;
     sc_base->size = sc_size;
+    sc_base->jobs = 0;
 
     D_ClearCacheGuard();
 }
@@ -107,6 +114,7 @@ void D_FlushCaches(void) {
     if (!sc_base)
         return;
 
+    D_SpanJobsFinish();
     for (c = sc_base; c; c = c->next) {
         if (c->owner)
             *c->owner = NULL;
@@ -116,6 +124,7 @@ void D_FlushCaches(void) {
     sc_base->next = NULL;
     sc_base->owner = NULL;
     sc_base->size = sc_size;
+    sc_base->jobs = 0;
 }
 
 /*
@@ -149,7 +158,9 @@ surfcache_t* D_SCAlloc(i32 width, i32 size) {
     }
 
     // colect and free surfcache_t blocks until the rover block is large enough
+    // (blocks the span worker still reads are drawn from first: d_spanjob.c)
     new = sc_rover;
+    D_SpanJobsRelease(sc_rover);
     if (sc_rover->owner)
         *sc_rover->owner = NULL;
 
@@ -158,6 +169,7 @@ surfcache_t* D_SCAlloc(i32 width, i32 size) {
         sc_rover = sc_rover->next;
         if (!sc_rover)
             Sys_Error("D_SCAlloc: hit the end of memory");
+        D_SpanJobsRelease(sc_rover);
         if (sc_rover->owner)
             *sc_rover->owner = NULL;
 
@@ -172,6 +184,7 @@ surfcache_t* D_SCAlloc(i32 width, i32 size) {
         sc_rover->next = new->next;
         sc_rover->width = 0;
         sc_rover->owner = NULL;
+        sc_rover->jobs = 0;
         new->next = sc_rover;
         new->size = size;
     } else
@@ -245,7 +258,21 @@ D_CacheSurface
 ================
 */
 surfcache_t* D_CacheSurface(msurface_t* surface, i32 miplevel) {
+    qboolean build;
+    surfcache_t* cache = D_CacheSurfaceFind(surface, miplevel, &build);
+
+    if (build) {
+        R_DrawSurface();
+    }
+    return cache;
+}
+
+// D_CacheSurface() without drawing the surface: `build` says whether it is to
+// be drawn, by R_DrawSurface() with r_drawsurf as it is now (in a span job)
+surfcache_t* D_CacheSurfaceFind(msurface_t* surface, i32 miplevel, qboolean* build) {
     surfcache_t* cache;
+
+    *build = false;
 
     //
     // if the surface is animating or flashing, flush the cache
@@ -266,8 +293,11 @@ surfcache_t* D_CacheSurface(msurface_t* surface, i32 miplevel) {
         cache->lightadj[0] == r_drawsurf.lightadj[0] &&
         cache->lightadj[1] == r_drawsurf.lightadj[1] &&
         cache->lightadj[2] == r_drawsurf.lightadj[2] &&
-        cache->lightadj[3] == r_drawsurf.lightadj[3])
+        cache->lightadj[3] == r_drawsurf.lightadj[3]) {
+        // a span job may still have to build it (a brush model drawn twice)
+        D_SpanJobsRelease(cache);
         return cache;
+    }
 
     //
     // determine shape of surface
@@ -281,6 +311,10 @@ surfcache_t* D_CacheSurface(msurface_t* surface, i32 miplevel) {
     //
     // allocate memory if needed
     //
+    if (cache) {
+        // drawn again where it is: not while the span worker reads it
+        D_SpanJobsRelease(cache);
+    }
     if (!cache) // if a texture just animated, don't reallocate it
     {
         cache = D_SCAlloc(r_drawsurf.surfwidth,
@@ -309,7 +343,7 @@ surfcache_t* D_CacheSurface(msurface_t* surface, i32 miplevel) {
     r_drawsurf.surf = surface;
 
     c_surf++;
-    R_DrawSurface();
+    *build = true;
 
     return surface->cachespots[miplevel];
 }

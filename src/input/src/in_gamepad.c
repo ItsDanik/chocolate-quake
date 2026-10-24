@@ -26,6 +26,10 @@
 #include "sys.h"
 #include <SDL.h>
 
+#ifdef MISTER_HYBRID
+#include "mister_port.h"
+#endif
+
 
 static cvar_t joy_deadzone_look = {"joy_deadzone_look", "0.175", true};
 static cvar_t joy_deadzone_move = {"joy_deadzone_move", "0.175", true};
@@ -45,6 +49,9 @@ typedef struct {
     qboolean pressed;     // The current state of the button.
     i32 key;              // The key code associated with this button.
     double timer;         // Timer to manage repeated button presses.
+#ifdef MISTER_HYBRID
+    i32 sent;             // The key its press sent (0: none), to release.
+#endif
 } button_t;
 
 typedef struct {
@@ -85,6 +92,14 @@ static button_t buttons[SDL_CONTROLLER_BUTTON_MAX] = {
     [SDL_CONTROLLER_BUTTON_DPAD_DOWN] = {.key = K_DOWNARROW},
     [SDL_CONTROLLER_BUTTON_DPAD_LEFT] = {.key = K_LEFTARROW},
     [SDL_CONTROLLER_BUTTON_DPAD_RIGHT] = {.key = K_RIGHTARROW},
+#ifdef MISTER_HYBRID
+    // the core's Menu OK / Menu Back and the MiSTer menu's
+    // (MiSTer_AddMappings()): in menus only
+    [SDL_CONTROLLER_BUTTON_PADDLE1] = {.key = K_ENTER},
+    [SDL_CONTROLLER_BUTTON_PADDLE2] = {.key = K_ESCAPE},
+    [SDL_CONTROLLER_BUTTON_PADDLE3] = {.key = K_ENTER},
+    [SDL_CONTROLLER_BUTTON_PADDLE4] = {.key = K_ESCAPE},
+#endif
 };
 static button_t left_trigger_button = {.key = K_LTRIGGER};
 static button_t right_trigger_button = {.key = K_RTRIGGER};
@@ -155,6 +170,10 @@ static void IN_EmulateButtonForAxis(const SDL_GameControllerAxis axis_type) {
     const axis_button_mapping_t* mapping = &axes_mapping[axis_type];
     switch (mapping->type) {
         case EMULATE_ANALOG_STICK:
+#ifdef MISTER_HYBRID
+            // MiSTer presses the d-pad itself when the stick is pushed far
+            break;
+#endif
             if (key_dest != key_game) {
                 IN_EmulateButtonPress(axis, mapping);
             }
@@ -179,10 +198,108 @@ GAMEPAD EVENT
 ================================================================================
 */
 
+#ifdef MISTER_HYBRID
+/*
+MiSTer presses the d-pad as well when the left stick is pushed far (Main
+does that for every core). In the game the stick moves and the d-pad has
+commands of its own: a d-pad press is dropped while the stick points its way.
+*/
+static qboolean IN_StickHoldsDpad(const button_t* button) {
+    // the stick as it is now: its events may come after the d-pad's
+    const i32 far = 8192; // MiSTer's own threshold is further out
+    if (!gamepad) {
+        return false;
+    }
+    i32 x = SDL_GameControllerGetAxis(gamepad, SDL_CONTROLLER_AXIS_LEFTX);
+    i32 y = SDL_GameControllerGetAxis(gamepad, SDL_CONTROLLER_AXIS_LEFTY);
+    if (button == &buttons[SDL_CONTROLLER_BUTTON_DPAD_UP]) {
+        return y < -far;
+    }
+    if (button == &buttons[SDL_CONTROLLER_BUTTON_DPAD_DOWN]) {
+        return y > far;
+    }
+    if (button == &buttons[SDL_CONTROLLER_BUTTON_DPAD_LEFT]) {
+        return x < -far;
+    }
+    if (button == &buttons[SDL_CONTROLLER_BUTTON_DPAD_RIGHT]) {
+        return x > far;
+    }
+    return false;
+}
+
+/*
+The key a press of the button sends, 0 for none. In menus, Menu OK and
+Menu Back confirm and go back (the paddles): the buttons of the game's
+actions do nothing there, as one of them is also Menu OK's button, except
+while a key is being bound to one. In the game the paddles do nothing.
+*/
+static i32 IN_MiSTerKey(const button_t* button) {
+    extern i32 bind_grab;
+    // when a pad button was bound to a command: Menu OK and Menu Back are
+    // often the same physical button and come right after it, and would
+    // bind again or leave the menu
+    static double bound_time = -1;
+    switch (button->key) {
+        case K_ENTER:
+        case K_ESCAPE:
+            if (button == &buttons[SDL_CONTROLLER_BUTTON_START]) {
+                return K_ESCAPE; // the game's Menu button
+            }
+            if (key_dest == key_game
+                || Sys_FloatTime() - bound_time < 0.25) {
+                return 0;
+            }
+            return button->key;
+        case K_UPARROW:
+        case K_DOWNARROW:
+        case K_LEFTARROW:
+        case K_RIGHTARROW:
+            if (key_dest == key_game && IN_StickHoldsDpad(button)) {
+                return 0;
+            }
+            return button->key;
+        default:
+            if (key_dest == key_menu && !bind_grab) {
+                return 0;
+            }
+            if (key_dest == key_menu) {
+                bound_time = Sys_FloatTime();
+            }
+            return button->key;
+    }
+}
+#endif
+
 static void IN_SendButtonEvent(button_t* button) {
     // Using `realtime` could cause issues with key repeats
     // due to non-monotonic behavior.
     const double now = Sys_FloatTime();
+#ifdef MISTER_HYBRID
+    // every key that goes down comes up, whatever happened in between
+    if (!button->was_pressed) {
+        if (button->pressed) {
+            button->sent = IN_MiSTerKey(button);
+            button->timer = now + 0.5;
+            if (button->sent) {
+                Key_Event(button->sent, true);
+            }
+        }
+        return;
+    }
+    if (button->pressed) {
+        if (button->sent && now >= button->timer) {
+            button->timer = now + 0.1;
+            Key_Event(button->sent, true);
+        }
+        return;
+    }
+    button->timer = 0;
+    if (button->sent) {
+        Key_Event(button->sent, false);
+        button->sent = 0;
+    }
+    return;
+#endif
     if (!button->was_pressed) {
         if (button->pressed) {
             button->timer = now + 0.5;
@@ -403,6 +520,39 @@ static void IN_RegisterCvars(void) {
     Cvar_RegisterVariable(&joy_enable);
 }
 
+#ifdef MISTER_HYBRID
+/*
+The joysticks of the hybrid core (hybrid/sdl2): buttons 0..7 are the
+actions of the core's "J1" list in the order of its "jn" (A, B, X, Y, L, R,
+Select, Start), 8 and 9 its own Menu OK and Menu Back, 28 and 29 the MiSTer
+menu's, 30 and 31 the stick clicks. The d-pad is hat 0, the analog triggers
+(read from Linux by the hybrid library) axes 4 and 5, resting at 0.
+*/
+static void IN_AddMiSTerMappings(void) {
+    for (i32 i = 0; i < SDL_NumJoysticks(); i++) {
+        const char* name = SDL_JoystickNameForIndex(i);
+        char guid[64];
+        char mapping[512];
+        if (!name || SDL_strncmp(name, "MiSTer Joystick", 15) != 0) {
+            continue;
+        }
+        SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(i), guid,
+                                  sizeof(guid));
+        SDL_snprintf(mapping, sizeof(mapping), "%s,%s,"
+            "a:b0,b:b1,x:b2,y:b3,leftshoulder:b4,rightshoulder:b5,back:b6,"
+            "start:b7,paddle1:b8,paddle2:b9,paddle3:b28,paddle4:b29,"
+            "leftstick:b30,rightstick:b31,"
+            "dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,"
+            "leftx:a0,lefty:a1,rightx:a2,righty:a3,"
+            "lefttrigger:+a4,righttrigger:+a5,",
+            guid, name);
+        if (SDL_GameControllerAddMapping(mapping) < 0) {
+            Con_Printf("Couldn't map %s: %s\n", name, SDL_GetError());
+        }
+    }
+}
+#endif
+
 void IN_InitGamepad(void) {
     IN_RegisterCvars();
     if (COM_CheckParm("-nojoy")) {
@@ -414,6 +564,16 @@ void IN_InitGamepad(void) {
         return;
     }
     SDL_GameControllerEventState(SDL_ENABLE);
+#ifdef MISTER_HYBRID
+    IN_AddMiSTerMappings();
+    // they were there before the mapping: no event says they were added
+    for (i32 i = 0; i < SDL_NumJoysticks() && !gamepad; i++) {
+        if (SDL_IsGameController(i)) {
+            SDL_ControllerDeviceEvent added = {.which = i};
+            IN_AddedControllerEvent(&added);
+        }
+    }
+#endif
 }
 
 void IN_ShutdownGamepad(void) {

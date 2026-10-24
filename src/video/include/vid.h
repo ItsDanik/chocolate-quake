@@ -42,12 +42,23 @@ typedef struct {
     pixel_t* colormap; // 256 * VID_GRADES size
     u32 width;
     u32 height;
+    u32 width2d; // what the 2D (status bar, console, menus) is laid out in:
+                 // the width, or half of it where it is drawn twice as wide
+                 // (the MiSTer's 640-wide modes)
+    i32 hud_top;    // the row the top HUD (the console's lines) starts at,
+    i32 hud_bottom; // and the one under the bottom HUD (the status bar): 0
+                    // and the height, but in the MiSTer's 240-line modes
+    qboolean hud_over_view; // the MiSTer's 240-line modes: the view fills
+                            // the screen, the HUD is drawn over it
     float aspect; // width / height -- < 0 is taller than wide
     i32 numpages;
     i32 recalc_refdef; // if true, recalc vid-based stuff
 } viddef_t;
 
 extern viddef_t vid; // global video state
+
+// the rows at the bottom the view leaves to the status bar
+#define VID_VIEW_SB_LINES(sb_lines) (vid.hud_over_view ? 0 : (sb_lines))
 
 void VID_LockBuffer(void);
 

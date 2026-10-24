@@ -70,6 +70,15 @@ float r_avertexnormals[NUMVERTEXNORMALS][3] = {
 #include "anorms.h"
 };
 
+// Mod_Extradata(): a model loaded again moves the cache, and the queued spans
+// of the models before read their skins there (d_spanjob.c)
+static void* R_AliasExtradata(model_t* mod) {
+    if (!Cache_Check(&mod->cache)) {
+        D_SpanJobsFinish();
+    }
+    return Mod_Extradata(mod);
+}
+
 void R_AliasTransformAndProjectFinalVerts(finalvert_t* fv, stvert_t* pstverts);
 void R_AliasSetUpTransform(i32 trivial_accept);
 void R_AliasTransformVector(vec3_t in, vec3_t out);
@@ -98,7 +107,7 @@ qboolean R_AliasCheckBBox(void) {
 
     currententity->trivial_accept = 0;
     pmodel = currententity->model;
-    pahdr = Mod_Extradata(pmodel);
+    pahdr = R_AliasExtradata(pmodel);
     pmdl = (mdl_t*) ((byte*) pahdr + pahdr->model);
 
     R_AliasSetUpTransform(0);
@@ -663,7 +672,7 @@ void R_AliasDrawModel(alight_t* plighting) {
                                   ~(CACHE_SIZE - 1));
     pauxverts = &auxverts[0];
 
-    paliashdr = (aliashdr_t*) Mod_Extradata(currententity->model);
+    paliashdr = (aliashdr_t*) R_AliasExtradata(currententity->model);
     pmdl = (mdl_t*) ((byte*) paliashdr + paliashdr->model);
 
     R_AliasSetupSkin();

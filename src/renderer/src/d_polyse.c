@@ -115,6 +115,9 @@ void D_PolysetRecursiveTriangle(i32* p1, i32* p2, i32* p3);
 void D_PolysetSetEdgeTable(void);
 void D_RasterizeAliasPolySmooth(void);
 void D_PolysetScanLeftEdge(i32 height);
+static void D_PolysetSpans(spanpackage_t* pspanpackage, qboolean last);
+static spanpackage_t* D_AliasReserve(i32 n);
+static qboolean alias_jobs; // this model's spans are queued (D_PolysetSpans())
 
 
 /*
@@ -130,7 +133,10 @@ void D_PolysetDraw(void) {
     a_spans = (spanpackage_t*) (((intptr_t) &spans[0] + CACHE_SIZE - 1) &
                                 ~(CACHE_SIZE - 1));
 
+    alias_jobs = !r_affinetridesc.drawtype && D_SpanJobsOn();
     if (r_affinetridesc.drawtype) {
+        // drawn here: after the queued spans
+        D_SpanJobsFinish();
         D_DrawSubdiv();
     } else {
         D_DrawNonSubdiv();
@@ -146,6 +152,8 @@ D_PolysetDrawFinalVerts
 void D_PolysetDrawFinalVerts(finalvert_t* fv, i32 numverts) {
     i32 i, z;
     i16* zbuf;
+
+    D_SpanJobsFinish(); // after the queued spans
 
     for (i = 0; i < numverts; i++, fv++) {
         // valid triangle coordinates for filling can include the bottom and
@@ -550,59 +558,210 @@ void InitGel(byte* palette) {
 D_PolysetDrawSpans8
 ================
 */
-void D_PolysetDrawSpans8(spanpackage_t* pspanpackage) {
-    i32 lcount;
-    byte* lpdest;
-    byte* lptex;
-    i32 lsfrac, ltfrac;
-    i32 llight;
-    i32 lzi;
-    i16* lpz;
+// Alias model spans on two CPUs (d_spanjob.c): each call of the span drawer
+// becomes a record with its packages (a row each) in a ring. The game thread
+// draws its even rows at once; the odd ones are drawn from the queue, in its
+// order, one record at a time, by the worker or (while it waits for them)
+// the game thread. Each pixel is in one row, so the pixels and the z buffer
+// are written in id's order. Whatever else draws pixels or reads the z
+// buffer (the subdivided triangles, sprites, particles, the 2D) waits for
+// them first, D_SpanJobsFinish().
+#define ALIAS_RING 16384 // span packages
+#define ALIAS_RECS 4096
+
+typedef struct {
+    spanpackage_t* spans;
+    i32 count; // packages
+    i32 row0;  // the screen row of the first
+    const byte* colormap;
+    i32 zistepx, lstepx, ststepxwhole, sstepxfrac, tstepxfrac, skinwidth;
+    i32 adjustup, adjustdown, countextrastep, basestep, error, aspancount;
+    i32 release; // the ring's packages before this are free once it is drawn
+} d_aliasjob_t;
+
+static spanpackage_t alias_ring[ALIAS_RING];
+static d_aliasjob_t alias_recs[ALIAS_RECS];
+static i32 alias_queued; // records queued: written by the game thread only
+static i32 alias_next;   // the next record to draw, under alias_lock
+static i32 alias_done;   // records drawn
+static i32 alias_free;   // ring position the drawn records have released
+static i32 alias_lock;
+static i32 alias_head, alias_start; // the game thread's: ring positions
+static i32 alias_top;               // the triangle's top row
+
+// The steps of D_PolysetDrawSpans8, from the globals
+static void D_PolysetJobSetup(d_aliasjob_t* job, spanpackage_t* pspanpackage) {
+    i32 count = 1;
+
+    // as many packages as id's loop would draw: up to the end marker
+    while (pspanpackage[count].count != -999999) {
+        count++;
+    }
+    job->spans = pspanpackage;
+    job->count = count;
+    job->row0 = alias_top + (i32) (pspanpackage - a_spans);
+    job->colormap = (const byte*) acolormap;
+    job->zistepx = r_zistepx;
+    job->lstepx = r_lstepx;
+    job->ststepxwhole = a_ststepxwhole;
+    job->sstepxfrac = a_sstepxfrac;
+    job->tstepxfrac = a_tstepxfrac;
+    job->skinwidth = r_affinetridesc.skinwidth;
+    job->adjustup = erroradjustup;
+    job->adjustdown = erroradjustdown;
+    job->countextrastep = d_countextrastep;
+    job->basestep = ubasestep;
+    job->error = errorterm;
+    job->aspancount = d_aspancount;
+}
+
+// id's loop with everything in registers: a byte store could change the
+// globals, so the compiler loaded every step again for every pixel (the same
+// pixels as id's code, faster on the MiSTer's ARM). Returns the right edge's
+// error term and count at the end. `parity`: the rows drawn, 0 even, 1 odd,
+// -1 all.
+static void D_PolysetJobDraw(const d_aliasjob_t* job, const i32 parity, i32* errorp,
+                             i32* aspancountp) {
+    const byte* const colormap = job->colormap;
+    const i32 zistepx = job->zistepx;
+    const i32 lstepx = job->lstepx;
+    const i32 ststepxwhole = job->ststepxwhole;
+    const i32 sstepxfrac = job->sstepxfrac;
+    const i32 tstepxfrac = job->tstepxfrac;
+    const i32 skinwidth = job->skinwidth;
+    const i32 adjustup = job->adjustup;
+    const i32 adjustdown = job->adjustdown;
+    const i32 countextrastep = job->countextrastep;
+    const i32 basestep = job->basestep;
+    const spanpackage_t* pspanpackage = job->spans;
+    const spanpackage_t* const end = pspanpackage + job->count;
+    i32 error = job->error;
+    i32 aspancount = job->aspancount;
+    i32 row = job->row0;
 
     do {
-        lcount = d_aspancount - pspanpackage->count;
+        i32 lcount = aspancount - pspanpackage->count;
 
-        errorterm += erroradjustup;
-        if (errorterm >= 0) {
-            d_aspancount += d_countextrastep;
-            errorterm -= erroradjustdown;
+        error += adjustup;
+        if (error >= 0) {
+            aspancount += countextrastep;
+            error -= adjustdown;
         } else {
-            d_aspancount += ubasestep;
+            aspancount += basestep;
         }
 
-        if (lcount) {
-            lpdest = pspanpackage->pdest;
-            lptex = pspanpackage->ptex;
-            lpz = pspanpackage->pz;
-            lsfrac = pspanpackage->sfrac;
-            ltfrac = pspanpackage->tfrac;
-            llight = pspanpackage->light;
-            lzi = pspanpackage->zi;
+        if (lcount && (parity < 0 || ((row ^ parity) & 1) == 0)) {
+            byte* lpdest = pspanpackage->pdest;
+            byte* lptex = pspanpackage->ptex;
+            i16* lpz = pspanpackage->pz;
+            i32 lsfrac = pspanpackage->sfrac;
+            i32 ltfrac = pspanpackage->tfrac;
+            i32 llight = pspanpackage->light;
+            i32 lzi = pspanpackage->zi;
 
             do {
                 if ((lzi >> 16) >= *lpz) {
-                    *lpdest = ((byte*) acolormap)[*lptex + (llight & 0xFF00)];
-                    // gel mapping					*lpdest = gelmap[*lpdest];
+                    *lpdest = colormap[*lptex + (llight & 0xFF00)];
                     *lpz = lzi >> 16;
                 }
                 lpdest++;
-                lzi += r_zistepx;
+                lzi += zistepx;
                 lpz++;
-                llight += r_lstepx;
-                lptex += a_ststepxwhole;
-                lsfrac += a_sstepxfrac;
+                llight += lstepx;
+                lptex += ststepxwhole;
+                lsfrac += sstepxfrac;
                 lptex += lsfrac >> 16;
                 lsfrac &= 0xFFFF;
-                ltfrac += a_tstepxfrac;
+                ltfrac += tstepxfrac;
                 if (ltfrac & 0x10000) {
-                    lptex += r_affinetridesc.skinwidth;
+                    lptex += skinwidth;
                     ltfrac &= 0xFFFF;
                 }
             } while (--lcount);
         }
 
         pspanpackage++;
-    } while (pspanpackage->count != -999999);
+        row++;
+    } while (pspanpackage != end);
+
+    *errorp = error;
+    *aspancountp = aspancount;
+}
+
+void D_PolysetDrawSpans8(spanpackage_t* pspanpackage) {
+    d_aliasjob_t job;
+
+    D_PolysetJobSetup(&job, pspanpackage);
+    D_PolysetJobDraw(&job, -1, &errorterm, &d_aspancount);
+}
+
+qboolean D_AliasTakeJob(void) {
+    i32 n, error, aspancount;
+
+    if (__atomic_load_n(&alias_next, __ATOMIC_RELAXED) >=
+        __atomic_load_n(&alias_queued, __ATOMIC_ACQUIRE)) {
+        return false;
+    }
+    if (__atomic_exchange_n(&alias_lock, 1, __ATOMIC_ACQUIRE)) {
+        return false; // the other thread draws one
+    }
+    n = alias_next;
+    if (n >= __atomic_load_n(&alias_queued, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&alias_lock, 0, __ATOMIC_RELEASE);
+        return false;
+    }
+    D_PolysetJobDraw(&alias_recs[n % ALIAS_RECS], 1, &error, &aspancount);
+    alias_next = n + 1;
+    __atomic_store_n(&alias_free, alias_recs[n % ALIAS_RECS].release, __ATOMIC_RELEASE);
+    __atomic_store_n(&alias_done, n + 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&alias_lock, 0, __ATOMIC_RELEASE);
+    return true;
+}
+
+qboolean D_AliasJobsPending(void) {
+    return __atomic_load_n(&alias_done, __ATOMIC_ACQUIRE) != alias_queued;
+}
+
+void D_AliasJobsReset(void) {
+    alias_queued = alias_next = alias_done = 0;
+    alias_free = alias_head = alias_start = 0;
+}
+
+// Room in the ring for a triangle's packages, waiting (and drawing) while
+// the records before still read it
+static spanpackage_t* D_AliasReserve(i32 n) {
+    i32 pos = alias_head;
+
+    if (pos % ALIAS_RING + n > ALIAS_RING) {
+        pos += ALIAS_RING - pos % ALIAS_RING; // the rest of the ring is left out
+    }
+    while (pos + n - __atomic_load_n(&alias_free, __ATOMIC_ACQUIRE) > ALIAS_RING) {
+        D_AliasTakeJob();
+    }
+    alias_start = pos;
+    alias_head = pos + n;
+    return &alias_ring[pos % ALIAS_RING];
+}
+
+// D_PolysetDrawSpans8, or its record queued; `last`: the triangle's last
+static void D_PolysetSpans(spanpackage_t* pspanpackage, qboolean last) {
+    d_aliasjob_t job;
+
+    if (!alias_jobs) {
+        D_PolysetDrawSpans8(pspanpackage);
+        return;
+    }
+    i32 error, aspancount;
+
+    D_PolysetJobSetup(&job, pspanpackage);
+    job.release = last ? alias_head : alias_start;
+    D_PolysetJobDraw(&job, 0, &error, &aspancount);
+    while (alias_queued - __atomic_load_n(&alias_done, __ATOMIC_ACQUIRE) >= ALIAS_RECS) {
+        D_AliasTakeJob();
+    }
+    alias_recs[alias_queued % ALIAS_RECS] = job;
+    __atomic_store_n(&alias_queued, alias_queued + 1, __ATOMIC_RELEASE);
+    D_JobsOpen();
 }
 
 /*
@@ -656,6 +815,20 @@ void D_RasterizeAliasPolySmooth(void) {
 
     initialleftheight = pleftbottom[1] - plefttop[1];
     initialrightheight = prightbottom[1] - prighttop[1];
+
+    if (alias_jobs) {
+        // the triangle's rows and the end marker, in the ring
+        i32 rows = initialrightheight;
+        if (pedgetable->numrightedges == 2) {
+            rows += pedgetable->prightedgevert2[1] - prightbottom[1];
+        }
+        i32 left = initialleftheight;
+        if (pedgetable->numleftedges == 2) {
+            left += pedgetable->pleftedgevert2[1] - pleftbottom[1];
+        }
+        a_spans = D_AliasReserve((rows > left ? rows : left) + 2);
+        alias_top = plefttop[1];
+    }
 
     //
     // set the s, t, and light gradients, which are consistent across the triangle
@@ -826,7 +999,7 @@ void D_RasterizeAliasPolySmooth(void) {
     d_countextrastep = ubasestep + 1;
     originalcount = a_spans[initialrightheight].count;
     a_spans[initialrightheight].count = -999999; // mark end of the spanpackages
-    D_PolysetDrawSpans8(a_spans);
+    D_PolysetSpans(a_spans, pedgetable->numrightedges != 2);
 
     // scan out the bottom part of the right edge, if it exists
     if (pedgetable->numrightedges == 2) {
@@ -849,7 +1022,7 @@ void D_RasterizeAliasPolySmooth(void) {
         d_countextrastep = ubasestep + 1;
         a_spans[initialrightheight + height].count = -999999;
         // mark end of the spanpackages
-        D_PolysetDrawSpans8(pstart);
+        D_PolysetSpans(pstart, true);
     }
 }
 

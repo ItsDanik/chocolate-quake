@@ -29,6 +29,9 @@ set(LIBS
     video
     wad
 )
+if(MISTER_HYBRID)
+    list(APPEND LIBS mister)
+endif()
 foreach(LIB ${LIBS})
     add_subdirectory(${LIB})
 endforeach()

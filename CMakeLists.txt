@@ -19,9 +19,23 @@ if(MATH)
     link_libraries(${MATH})
 endif()
 
+# MiSTer hybrid core: built against the static SDL2 with the MiSTer drivers
+# (hybrid/sdl2), whose SDL2_mixer source also has the music decoders the
+# MiSTer build takes in place of libvorbis, libFLAC and libmad
+# (src/sound/src/snd_mister.c)
+option(MISTER_HYBRID "Build for the MiSTer hybrid core (needs SDL2 with the MiSTer drivers)" OFF)
+set(MISTER_CODECS "" CACHE PATH "SDL2_mixer's src/codecs (stb_vorbis, dr_libs, minimp3), for MISTER_HYBRID")
+
 find_package(SDL2 CONFIG REQUIRED)
 find_package(SDL2_net CONFIG REQUIRED)
-if(UNIX AND NOT APPLE)
+if(MISTER_HYBRID)
+	if(NOT EXISTS "${MISTER_CODECS}/stb_vorbis/stb_vorbis.h")
+		message(FATAL_ERROR "MISTER_CODECS must name SDL2_mixer's src/codecs")
+	endif()
+	# with its dependencies (threads, the hybrid library) through its target
+	set(SDL2_LIBRARIES SDL2::SDL2-static)
+	add_compile_definitions(MISTER_HYBRID)
+elseif(UNIX AND NOT APPLE)
 	find_library(VORBIS_LIBRARY vorbis REQUIRED)
 	find_library(VORBISFILE_LIBRARY vorbisfile REQUIRED)
 	find_library(MAD_LIBRARY mad REQUIRED)

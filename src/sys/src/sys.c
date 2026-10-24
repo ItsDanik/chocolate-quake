@@ -40,6 +40,10 @@
 #include <signal.h>
 #endif
 
+#ifdef MISTER_HYBRID
+#include "mister_port.h"
+#endif
+
 
 qboolean isDedicated;
 
@@ -170,7 +174,12 @@ void Sys_Error(char* error, ...) {
 
     fflush(stdout);
     fprintf(stderr, "Error: %s\n", string);
+#ifdef MISTER_HYBRID
+    // on the purple screen until the player leaves the core
+    MiSTer_ShowError(string);
+#else
     Sys_ShowErrorModal(string);
+#endif
 
     Host_Shutdown();
     exit(1);
@@ -186,8 +195,13 @@ void Sys_Printf(char* fmt, ...) {
 
 void Sys_Quit(void) {
     Host_Shutdown();
+#ifdef MISTER_HYBRID
+    // no end screen: back to the list or the MiSTer menu
+    exit(MiSTer_ExitCode());
+#else
     ES_DisplayScreen();
     exit(0);
+#endif
 }
 
 double Sys_FloatTime() {
@@ -218,6 +232,12 @@ SYSTEM EVENT POLLING
 */
 
 static void Sys_QuitEvent(void) {
+#ifdef MISTER_HYBRID
+    // the core was left or another one loaded: no question
+    CL_Disconnect();
+    Host_ShutdownServer(false);
+    Sys_Quit();
+#endif
     if (M_IsInQuitScreen()) {
         // Confirm quit.
         Key_Event('Y', true);
@@ -307,10 +327,15 @@ static void Sys_SigInit(void) {
 //=============================================================================
 
 
+#ifdef MISTER_HYBRID
+// the MiSTer has 512MB in all, the FPGA's share and Linux's taken
+#define DEFAULT_MEMORY (64 * 1024 * 1024)
+#else
 #define DEFAULT_MEMORY (256 * 1024 * 1024)
+#endif
 
 static char* Sys_GetDefaultBaseDir(void) {
-#ifdef _WIN32
+#if defined(_WIN32) || defined(MISTER_HYBRID)
     return ".";
 #else
     static char base_dir[MAX_OSPATH] = {0};

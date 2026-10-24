@@ -30,3 +30,6 @@ target_link_libraries(${LIB} PRIVATE
     status_bar
     sys
 )
+if(MISTER_HYBRID)
+    target_link_libraries(${LIB} PRIVATE mister)
+endif()

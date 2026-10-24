@@ -192,6 +192,10 @@ static void VID_ApplyMode(i32 mode_num) {
     current_mode = mode_num;
     const vid_mode_t* mode = VID_GetMode(mode_num);
     vid.width = mode->width;
+    vid.width2d = mode->width;
+    vid.hud_top = 0;
+    vid.hud_bottom = mode->height;
+    vid.hud_over_view = false;
     vid.height = mode->height;
     vid.aspect = ((float) vid.height / (float) vid.width) * (320.0f / 240.0f);
     vid.recalc_refdef = true;

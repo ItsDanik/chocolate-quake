@@ -140,7 +140,7 @@ Draws one solid graphics character
 ================
 */
 void M_DrawCharacter(i32 cx, i32 line, i32 num) {
-    Draw_Character(cx + ((vid.width - 320) >> 1), line, num);
+    Draw_Character(cx + ((vid.width2d - 320) >> 1), line, num);
 }
 
 void M_Print(i32 cx, i32 cy, char* str) {
@@ -160,11 +160,11 @@ void M_PrintWhite(i32 cx, i32 cy, char* str) {
 }
 
 void M_DrawTransPic(i32 x, i32 y, qpic_t* pic) {
-    Draw_TransPic(x + ((vid.width - 320) >> 1), y, pic);
+    Draw_TransPic(x + ((vid.width2d - 320) >> 1), y, pic);
 }
 
 void M_DrawPic(i32 x, i32 y, qpic_t* pic) {
-    Draw_Pic(x + ((vid.width - 320) >> 1), y, pic);
+    Draw_Pic(x + ((vid.width2d - 320) >> 1), y, pic);
 }
 
 byte identityTable[256];
@@ -195,7 +195,7 @@ void M_BuildTranslationTable(i32 top, i32 bottom) {
 
 
 void M_DrawTransPicTranslate(i32 x, i32 y, qpic_t* pic) {
-    Draw_TransPicTranslate(x + ((vid.width - 320) >> 1), y, pic,
+    Draw_TransPicTranslate(x + ((vid.width2d - 320) >> 1), y, pic,
                            translationTable);
 }
 
@@ -1510,6 +1510,9 @@ void M_Quit_Key(i32 key) {
         case 'Y':
         case 'y':
         case K_ABUTTON:
+#ifdef MISTER_HYBRID
+        case K_ENTER: // Menu OK: the pad's A does nothing in menus
+#endif
             key_dest = key_console;
             Host_Quit_f();
             break;

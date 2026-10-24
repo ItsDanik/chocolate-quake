@@ -1494,3 +1494,130 @@ void Host_InitCommands(void) {
 
     Cmd_AddCommand("mcache", Mod_Print);
 }
+
+
+#ifdef MISTER_HYBRID
+/*
+================================================================================
+
+THE OSD'S CHEATS (core/ChocolateQuake.sv, "P2,Cheats")
+
+In a single player game only. The switches use Quake's own commands, which
+toggle, run on the server at once as if the player had typed them: one is
+run when the player's state is not what the switch says, and what a switch
+turned on is turned off with it; what was typed in the console is left
+alone. The player's state is new on every level: the switches that are on
+are applied again.
+
+================================================================================
+*/
+
+#include "client.h"
+#include "mister_port.h"
+
+typedef struct {
+    i32 bit;
+    char* command;
+    qboolean ours; // the switch turned it on
+} mister_switch_t;
+
+static mister_switch_t mister_switches[] = {
+    {MISTER_CHEAT_GOD, "god", false},
+    {MISTER_CHEAT_NOCLIP, "noclip", false},
+    {MISTER_CHEAT_NOTARGET, "notarget", false},
+};
+
+// A command of the player's, run on the server now (SV_ReadClientMessage())
+static void Host_MiSTerCommand(char* command) {
+    client_t* save = host_client;
+    host_client = &svs.clients[0];
+    sv_player = host_client->edict;
+    Cmd_ExecuteString(command, src_client);
+    host_client = save;
+}
+
+static qboolean Host_MiSTerCheatState(i32 bit) {
+    const edict_t* player = svs.clients[0].edict;
+    switch (bit) {
+        case MISTER_CHEAT_GOD:
+            return ((i32) player->v.flags & FL_GODMODE) != 0;
+        case MISTER_CHEAT_NOCLIP:
+            return player->v.movetype == MOVETYPE_NOCLIP;
+        default:
+            return ((i32) player->v.flags & FL_NOTARGET) != 0;
+    }
+}
+
+static void Host_MiSTerFullHealth(void) {
+    edict_t* player = svs.clients[0].edict;
+    i32 armors = rogue ? (RIT_ARMOR1 | RIT_ARMOR2 | RIT_ARMOR3)
+                       : (IT_ARMOR1 | IT_ARMOR2 | IT_ARMOR3);
+    i32 red = rogue ? RIT_ARMOR3 : IT_ARMOR3;
+    if (player->v.health < 100) {
+        player->v.health = 100;
+    }
+    // the red armor, full
+    player->v.armortype = 0.8f;
+    player->v.armorvalue = 200;
+    player->v.items = (float) (((i32) player->v.items & ~armors) | red);
+}
+
+// The level's exit: of its trigger_changelevel, the one whose map comes
+// first by name. That is the next level, not a secret one (e1m4: e1m5, not
+// e1m8; hip1m4: hip1m5, not hipdm1), and from the start map episode 1.
+static void Host_MiSTerNextLevel(void) {
+    const char* next = NULL;
+    for (i32 i = 1; i < sv.num_edicts; i++) {
+        const edict_t* e = EDICT_NUM(i);
+        if (e->free
+            || Q_strcmp(PR_GetString(e->v.classname), "trigger_changelevel")) {
+            continue;
+        }
+        // a field of the game's code, not the engine's
+        eval_t* val = GetEdictFieldValue((edict_t*) e, "map");
+        const char* map = val ? PR_GetString(val->string) : "";
+        if (*map && (!next || Q_strcasecmp(map, next) < 0)) {
+            next = map;
+        }
+    }
+    if (next) {
+        Cbuf_AddText(va("changelevel %s\n", next));
+    }
+}
+
+void Host_MiSTerCheats(void) {
+    qboolean level = sv.active && svs.maxclients == 1
+                     && cls.signon == SIGNONS && !cls.demoplayback
+                     && !cl.intermission && svs.clients[0].edict;
+    i32 cheats = MiSTer_Cheats(level);
+
+    if (!level) {
+        return;
+    }
+    for (i32 i = 0; i < 3; i++) {
+        mister_switch_t* s = &mister_switches[i];
+        qboolean on = Host_MiSTerCheatState(s->bit);
+        if ((cheats & s->bit) && !on) {
+            Host_MiSTerCommand(s->command);
+            s->ours = true;
+        } else if (!(cheats & s->bit) && on && s->ours) {
+            Host_MiSTerCommand(s->command);
+            s->ours = false;
+        } else if (!on) {
+            s->ours = false;
+        }
+    }
+    if (cheats & MISTER_CHEAT_GIVE) {
+        Cbuf_AddText("impulse 9\n"); // all weapons, ammo and keys
+    }
+    if (cheats & MISTER_CHEAT_QUAD) {
+        Cbuf_AddText("impulse 255\n");
+    }
+    if (cheats & MISTER_CHEAT_HEALTH) {
+        Host_MiSTerFullHealth();
+    }
+    if (cheats & MISTER_CHEAT_NEXT) {
+        Host_MiSTerNextLevel();
+    }
+}
+#endif

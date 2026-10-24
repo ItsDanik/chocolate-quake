@@ -62,6 +62,10 @@ void VID_Update(vrect_t* rects) {
 }
 
 void D_BeginDirectRect(i32 x, i32 y, byte* pbitmap, i32 width, i32 height) {
+#ifdef MISTER_HYBRID
+    // no disc icon: every frame is shown at its own field
+    return;
+#endif
     if (!vid_initialized) {
         return;
     }
@@ -97,6 +101,10 @@ void D_BeginDirectRect(i32 x, i32 y, byte* pbitmap, i32 width, i32 height) {
 }
 
 void D_EndDirectRect(i32 x, i32 y, i32 width, i32 height) {
+#ifdef MISTER_HYBRID
+    // no disc icon: every frame is shown at its own field
+    return;
+#endif
     if (!vid_initialized) {
         return;
     }

@@ -25,3 +25,6 @@ target_link_libraries(${LIB} PRIVATE
     status_bar
     wad
 )
+if(MISTER_HYBRID)
+    target_link_libraries(${LIB} PRIVATE mister)
+endif()

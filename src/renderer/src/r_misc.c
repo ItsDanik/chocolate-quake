@@ -413,7 +413,7 @@ void R_SetupFrame(void) {
                 vrect.width = vid.width;
                 vrect.height = vid.height;
 
-                R_ViewChanged(&vrect, sb_lines, vid.aspect);
+                R_ViewChanged(&vrect, VID_VIEW_SB_LINES(sb_lines), vid.aspect);
             } else {
                 w = vid.width;
                 h = vid.height;
@@ -434,7 +434,9 @@ void R_SetupFrame(void) {
                 vrect.height = (i32) h;
 
                 R_ViewChanged(
-                    &vrect, (i32) ((float) sb_lines * (h / (float) vid.height)),
+                    &vrect,
+                    (i32) ((float) VID_VIEW_SB_LINES(sb_lines) *
+                           (h / (float) vid.height)),
                     vid.aspect * (h / w) *
                         ((float) vid.width / (float) vid.height));
             }
@@ -444,7 +446,7 @@ void R_SetupFrame(void) {
             vrect.width = vid.width;
             vrect.height = vid.height;
 
-            R_ViewChanged(&vrect, sb_lines, vid.aspect);
+            R_ViewChanged(&vrect, VID_VIEW_SB_LINES(sb_lines), vid.aspect);
         }
 
         r_viewchanged = false;

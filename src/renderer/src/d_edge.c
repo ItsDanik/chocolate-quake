@@ -173,6 +173,8 @@ void D_DrawSurfaces(void) {
     vec3_t world_transformed_modelorg;
     vec3_t local_modelorg;
 
+    const qboolean spanjobs = d_drawspans == D_DrawSpans8 && D_SpanJobsOn();
+
     currententity = &cl_entities[0];
     TransformVector(modelorg, transformed_modelorg);
     VectorCopy(transformed_modelorg, world_transformed_modelorg);
@@ -274,17 +276,49 @@ void D_DrawSurfaces(void) {
                 miplevel = D_MipLevelForScale(s->nearzi * scale_for_mip *
                                               pface->texinfo->mipadjust);
 
-                // FIXME: make this passed in to D_CacheSurface
-                pcurrentcache = D_CacheSurface(pface, miplevel);
+                if (spanjobs) {
+                    // on two CPUs, the surface built there too (d_spanjob.c)
+                    d_spanjob_t job;
+                    pcurrentcache = D_CacheSurfaceFind(pface, miplevel, &job.build);
+                    if (job.build) {
+                        job.drawsurf = r_drawsurf;
+                    }
+                    cacheblock = (pixel_t*) pcurrentcache->data;
+                    cachewidth = pcurrentcache->width;
 
-                cacheblock = (pixel_t*) pcurrentcache->data;
-                cachewidth = pcurrentcache->width;
+                    D_CalcGradients(pface);
 
-                D_CalcGradients(pface);
+                    job.spans = s->spans;
+                    job.cache = pcurrentcache;
+                    job.cacheblock = (const byte*) cacheblock;
+                    job.cachewidth = cachewidth;
+                    job.sdivzorigin = d_sdivzorigin;
+                    job.tdivzorigin = d_tdivzorigin;
+                    job.ziorigin = d_ziorigin;
+                    job.sdivzstepu = d_sdivzstepu;
+                    job.tdivzstepu = d_tdivzstepu;
+                    job.zistepu = d_zistepu;
+                    job.sdivzstepv = d_sdivzstepv;
+                    job.tdivzstepv = d_tdivzstepv;
+                    job.zistepv = d_zistepv;
+                    job.sadjust = sadjust;
+                    job.tadjust = tadjust;
+                    job.bbextents = bbextents;
+                    job.bbextentt = bbextentt;
+                    D_SpanJobQueue(&job);
+                } else {
+                    // FIXME: make this passed in to D_CacheSurface
+                    pcurrentcache = D_CacheSurface(pface, miplevel);
 
-                (*d_drawspans)(s->spans);
+                    cacheblock = (pixel_t*) pcurrentcache->data;
+                    cachewidth = pcurrentcache->width;
 
-                D_DrawZSpans(s->spans);
+                    D_CalcGradients(pface);
+
+                    (*d_drawspans)(s->spans);
+
+                    D_DrawZSpans(s->spans);
+                }
 
                 if (s->insubmodel) {
                     //
@@ -304,4 +338,7 @@ void D_DrawSurfaces(void) {
             }
         }
     }
+
+    // the spans are used again after this
+    D_SpanJobsFinish();
 }

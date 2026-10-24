@@ -20,6 +20,9 @@
 // screen.c -- master for refresh, status bar, console, chat, notify, etc
 
 
+#ifdef MISTER_HYBRID
+#include "mister_port.h"
+#endif
 #include "screen.h"
 #include "client.h"
 #include "cmd.h"
@@ -161,7 +164,7 @@ void SCR_DrawCenterString(void) {
         for (l = 0; l < 40; l++)
             if (start[l] == '\n' || !start[l])
                 break;
-        x = (vid.width - l * 8) / 2;
+        x = (vid.width2d - l * 8) / 2;
         for (j = 0; j < l; j++, x += 8) {
             Draw_Character(x, y, start[j]);
             if (!remaining--)
@@ -273,7 +276,7 @@ static void SCR_CalcRefdef(void) {
     vrect.width = vid.width;
     vrect.height = vid.height;
 
-    R_SetVrect(&vrect, &scr_vrect, sb_lines);
+    R_SetVrect(&vrect, &scr_vrect, VID_VIEW_SB_LINES(sb_lines));
 
     // guard against going from one mode to another that's less than half the
     // vertical resolution
@@ -281,7 +284,7 @@ static void SCR_CalcRefdef(void) {
         scr_con_current = vid.height;
 
     // notify the refresh of the change
-    R_ViewChanged(&vrect, sb_lines, vid.aspect);
+    R_ViewChanged(&vrect, VID_VIEW_SB_LINES(sb_lines), vid.aspect);
 }
 
 
@@ -342,6 +345,15 @@ void SCR_Init(void) {
 }
 
 
+// The view's top left corner in the 2D's pixels, inside the top HUD margin
+static i32 SCR_IconX(void) {
+    return scr_vrect.x * (i32) vid.width2d / (i32) vid.width;
+}
+
+static i32 SCR_IconY(void) {
+    return scr_vrect.y > vid.hud_top ? scr_vrect.y : vid.hud_top;
+}
+
 /*
 ==============
 SCR_DrawRam
@@ -354,7 +366,7 @@ void SCR_DrawRam(void) {
     if (!r_cache_thrash)
         return;
 
-    Draw_Pic(scr_vrect.x + 32, scr_vrect.y, scr_ram);
+    Draw_Pic(SCR_IconX() + 32, SCR_IconY(), scr_ram);
 }
 
 /*
@@ -377,7 +389,7 @@ void SCR_DrawTurtle(void) {
     if (count < 3)
         return;
 
-    Draw_Pic(scr_vrect.x, scr_vrect.y, scr_turtle);
+    Draw_Pic(SCR_IconX(), SCR_IconY(), scr_turtle);
 }
 
 /*
@@ -391,7 +403,7 @@ void SCR_DrawNet(void) {
     if (cls.demoplayback)
         return;
 
-    Draw_Pic(scr_vrect.x + 64, scr_vrect.y, scr_net);
+    Draw_Pic(SCR_IconX() + 64, SCR_IconY(), scr_net);
 }
 
 /*
@@ -409,7 +421,7 @@ void SCR_DrawPause(void) {
         return;
 
     pic = Draw_CachePic("gfx/pause.lmp");
-    Draw_Pic((vid.width - pic->width) / 2, (vid.height - 48 - pic->height) / 2,
+    Draw_Pic((vid.width2d - pic->width) / 2, (vid.height - 48 - pic->height) / 2,
              pic);
 }
 
@@ -426,7 +438,7 @@ void SCR_DrawLoading(void) {
         return;
 
     pic = Draw_CachePic("gfx/loading.lmp");
-    Draw_Pic((vid.width - pic->width) / 2, (vid.height - 48 - pic->height) / 2,
+    Draw_Pic((vid.width2d - pic->width) / 2, (vid.height - 48 - pic->height) / 2,
              pic);
 }
 
@@ -693,7 +705,7 @@ void SCR_DrawNotifyString(void) {
         for (l = 0; l < 40; l++)
             if (start[l] == '\n' || !start[l])
                 break;
-        x = (vid.width - l * 8) / 2;
+        x = (vid.width2d - l * 8) / 2;
         for (j = 0; j < l; j++, x += 8)
             Draw_Character(x, y, start[j]);
 
@@ -738,12 +750,21 @@ i32 SCR_ModalMessage(char* text) {
         Sys_SendKeyEvents();
     } while (key_lastpress != 'y' && key_lastpress != 'n'
              && key_lastpress != K_ESCAPE
+#ifdef MISTER_HYBRID
+             // Menu OK: the pad's A does nothing in menus
+             && (key_lastpress != K_ENTER || !keydown[K_ENTER])
+#endif
              && (key_lastpress != K_ABUTTON || !keydown[K_ABUTTON])
              && (key_lastpress != K_BBUTTON || !keydown[K_BBUTTON]));
 
     scr_fullupdate = 0;
     SCR_UpdateScreen();
 
+#ifdef MISTER_HYBRID
+    if (key_lastpress == K_ENTER) {
+        return true;
+    }
+#endif
     return key_lastpress == 'y' || key_lastpress == K_ABUTTON;
 }
 
@@ -859,16 +880,25 @@ void SCR_UpdateScreen(void) {
     V_RenderView();
 
     VID_UnlockBuffer();
+#ifdef MISTER_HYBRID
+    MiSTer_Mark(MISTER_T_HUD);
+#endif
 
     D_EnableBackBufferAccess(); // of all overlay stuff if drawing directly
 
     if (scr_drawdialog) {
+        if (vid.hud_over_view) {
+            Sbar_Changed();
+        }
         Sbar_Draw();
         Draw_FadeScreen();
         SCR_DrawNotifyString();
         scr_copyeverything = true;
     } else if (scr_drawloading) {
         SCR_DrawLoading();
+        if (vid.hud_over_view) {
+            Sbar_Changed();
+        }
         Sbar_Draw();
     } else if (cl.intermission == 1 && key_dest == key_game) {
         Sbar_IntermissionOverlay();
@@ -883,6 +913,9 @@ void SCR_UpdateScreen(void) {
         SCR_DrawTurtle();
         SCR_DrawPause();
         SCR_CheckDrawCenterString();
+        if (vid.hud_over_view) {
+            Sbar_Changed(); // the view was drawn where it is
+        }
         Sbar_Draw();
         SCR_DrawConsole();
         M_Draw();

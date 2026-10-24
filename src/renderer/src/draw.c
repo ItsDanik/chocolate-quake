@@ -131,6 +131,33 @@ It can be clipped to the top of the screen to allow the console to be
 smoothly scrolled off.
 ================
 */
+#ifdef MISTER_HYBRID
+// The MiSTer's 640-wide modes: the 2D is laid out in vid.width2d (320) and
+// drawn twice as wide, every pixel two
+#define WIDE_2D (vid.width2d != vid.width)
+
+// `transparent` -1 for none
+static void Draw_WideBlock(i32 x, i32 y, const byte* source, i32 width,
+                           i32 height, i32 stride, i32 transparent,
+                           const byte* translation) {
+    byte* dest = vid.buffer + y * vid.width + x * 2;
+    for (i32 v = 0; v < height; v++) {
+        for (i32 u = 0; u < width; u++) {
+            byte b = source[u];
+            if (b != transparent) {
+                if (translation) {
+                    b = translation[b];
+                }
+                dest[u * 2] = b;
+                dest[u * 2 + 1] = b;
+            }
+        }
+        dest += vid.width;
+        source += stride;
+    }
+}
+#endif
+
 void Draw_Character(i32 x, i32 y, i32 num) {
     byte* dest;
     byte* source;
@@ -161,6 +188,12 @@ void Draw_Character(i32 x, i32 y, i32 num) {
     } else
         drawline = 8;
 
+#ifdef MISTER_HYBRID
+    if (WIDE_2D) {
+        Draw_WideBlock(x, y, source, 8, drawline, 128, 0, NULL);
+        return;
+    }
+#endif
     dest = vid.buffer + y * vid.width + x;
 
     while (drawline--) {
@@ -249,12 +282,19 @@ void Draw_Pic(i32 x, i32 y, qpic_t* pic) {
     u16* pusdest;
     i32 v, u;
 
-    if ((x < 0) || (x + pic->width > vid.width) || (y < 0) ||
+    if ((x < 0) || (x + pic->width > vid.width2d) || (y < 0) ||
         (y + pic->height > vid.height)) {
         Sys_Error("Draw_Pic: bad coordinates");
     }
 
     source = pic->data;
+#ifdef MISTER_HYBRID
+    if (WIDE_2D) {
+        Draw_WideBlock(x, y, source, pic->width, pic->height, pic->width, -1,
+                       NULL);
+        return;
+    }
+#endif
 
     dest = vid.buffer + y * vid.width + x;
 
@@ -275,13 +315,20 @@ void Draw_TransPic(i32 x, i32 y, qpic_t* pic) {
     byte *dest, *source, tbyte;
     i32 v, u;
 
-    if (x < 0 || (u32) (x + pic->width) > vid.width
+    if (x < 0 || (u32) (x + pic->width) > vid.width2d
         || y < 0 || (u32) (y + pic->height) > vid.height)
     {
         Sys_Error("Draw_TransPic: bad coordinates");
     }
 
     source = pic->data;
+#ifdef MISTER_HYBRID
+    if (WIDE_2D) {
+        Draw_WideBlock(x, y, source, pic->width, pic->height, pic->width,
+                       TRANSPARENT_COLOR, NULL);
+        return;
+    }
+#endif
 
     dest = vid.buffer + y * vid.width + x;
 
@@ -330,12 +377,19 @@ void Draw_TransPicTranslate(i32 x, i32 y, qpic_t* pic, byte* translation) {
     byte *dest, *source, tbyte;
     i32 v, u;
 
-    if (x < 0 || (u32) (x + pic->width) > vid.width || y < 0 ||
+    if (x < 0 || (u32) (x + pic->width) > vid.width2d || y < 0 ||
         (u32) (y + pic->height) > vid.height) {
         Sys_Error("Draw_TransPic: bad coordinates");
     }
 
     source = pic->data;
+#ifdef MISTER_HYBRID
+    if (WIDE_2D) {
+        Draw_WideBlock(x, y, source, pic->width, pic->height, pic->width,
+                       TRANSPARENT_COLOR, translation);
+        return;
+    }
+#endif
 
     dest = vid.buffer + y * vid.width + x;
 
@@ -558,6 +612,12 @@ void Draw_Fill(i32 x, i32 y, i32 w, i32 h, i32 c) {
     byte* dest;
     i32 u, v;
 
+#ifdef MISTER_HYBRID
+    if (WIDE_2D) {
+        x *= 2;
+        w *= 2;
+    }
+#endif
     dest = vid.buffer + y * vid.width + x;
     for (v = 0; v < h; v++, dest += vid.width)
         for (u = 0; u < w; u++)

@@ -17,3 +17,6 @@ target_link_libraries(${LIB} PRIVATE
     screen
     server
 )
+if(MISTER_HYBRID)
+    target_link_libraries(${LIB} PRIVATE mister)
+endif()

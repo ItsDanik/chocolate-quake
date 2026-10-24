@@ -39,6 +39,8 @@ D_StartParticles
 ==============
 */
 void D_StartParticles(void) {
+    // after the alias models' spans (d_spanjob.c): they test the z buffer
+    D_SpanJobsFinish();
     // not used by software driver
 }
 
@@ -47,12 +49,28 @@ void D_StartParticles(void) {
 D_DrawParticle
 ==============
 */
+// A particle's square: the widths and its colour in registers (a byte store
+// could change the globals, so the compiler loaded them again every pixel).
+// `pix` is a constant where it is inlined, for cases 1 to 4.
+static inline void D_ParticleSquare(i16* pz, byte* pdest, const i32 izi, const byte color,
+                                    const i32 pix, i32 count, const i32 zwidth,
+                                    const i32 width) {
+    for (; count; count--, pz += zwidth, pdest += width) {
+        for (i32 i = 0; i < pix; i++) {
+            if (pz[i] <= izi) {
+                pz[i] = izi;
+                pdest[i] = color;
+            }
+        }
+    }
+}
+
 void D_DrawParticle(particle_t* pparticle) {
     vec3_t local, transformed;
     float zi;
     byte* pdest;
     i16* pz;
-    i32 i, izi, pix, count, u, v;
+    i32 izi, pix, u, v;
 
     // transform point
     VectorSubtract(pparticle->org, r_origin, local);
@@ -86,92 +104,24 @@ void D_DrawParticle(particle_t* pparticle) {
     else if (pix > d_pix_max)
         pix = d_pix_max;
 
+    const byte color = pparticle->color;
+    const i32 zwidth = d_zwidth;
+    const i32 width = screenwidth;
     switch (pix) {
         case 1:
-            count = 1 << d_y_aspect_shift;
-
-            for (; count; count--, pz += d_zwidth, pdest += screenwidth) {
-                if (pz[0] <= izi) {
-                    pz[0] = izi;
-                    pdest[0] = pparticle->color;
-                }
-            }
+            D_ParticleSquare(pz, pdest, izi, color, 1, 1 << d_y_aspect_shift, zwidth, width);
             break;
-
         case 2:
-            count = 2 << d_y_aspect_shift;
-
-            for (; count; count--, pz += d_zwidth, pdest += screenwidth) {
-                if (pz[0] <= izi) {
-                    pz[0] = izi;
-                    pdest[0] = pparticle->color;
-                }
-
-                if (pz[1] <= izi) {
-                    pz[1] = izi;
-                    pdest[1] = pparticle->color;
-                }
-            }
+            D_ParticleSquare(pz, pdest, izi, color, 2, 2 << d_y_aspect_shift, zwidth, width);
             break;
-
         case 3:
-            count = 3 << d_y_aspect_shift;
-
-            for (; count; count--, pz += d_zwidth, pdest += screenwidth) {
-                if (pz[0] <= izi) {
-                    pz[0] = izi;
-                    pdest[0] = pparticle->color;
-                }
-
-                if (pz[1] <= izi) {
-                    pz[1] = izi;
-                    pdest[1] = pparticle->color;
-                }
-
-                if (pz[2] <= izi) {
-                    pz[2] = izi;
-                    pdest[2] = pparticle->color;
-                }
-            }
+            D_ParticleSquare(pz, pdest, izi, color, 3, 3 << d_y_aspect_shift, zwidth, width);
             break;
-
         case 4:
-            count = 4 << d_y_aspect_shift;
-
-            for (; count; count--, pz += d_zwidth, pdest += screenwidth) {
-                if (pz[0] <= izi) {
-                    pz[0] = izi;
-                    pdest[0] = pparticle->color;
-                }
-
-                if (pz[1] <= izi) {
-                    pz[1] = izi;
-                    pdest[1] = pparticle->color;
-                }
-
-                if (pz[2] <= izi) {
-                    pz[2] = izi;
-                    pdest[2] = pparticle->color;
-                }
-
-                if (pz[3] <= izi) {
-                    pz[3] = izi;
-                    pdest[3] = pparticle->color;
-                }
-            }
+            D_ParticleSquare(pz, pdest, izi, color, 4, 4 << d_y_aspect_shift, zwidth, width);
             break;
-
         default:
-            count = pix << d_y_aspect_shift;
-
-            for (; count; count--, pz += d_zwidth, pdest += screenwidth) {
-                for (i = 0; i < pix; i++) {
-                    if (pz[i] <= izi) {
-                        pz[i] = izi;
-                        pdest[i] = pparticle->color;
-                    }
-                }
-            }
+            D_ParticleSquare(pz, pdest, izi, color, pix, pix << d_y_aspect_shift, zwidth, width);
             break;
     }
 }

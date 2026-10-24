@@ -20,6 +20,9 @@
 // view.c -- player eye positioning
 
 
+#ifdef MISTER_HYBRID
+#include "mister_port.h"
+#endif
 #include "view.h"
 #include "client.h"
 #include "cmd.h"
@@ -311,6 +314,11 @@ void V_ParseDamage(void) {
     count = blood * 0.5 + armor * 0.5;
     if (count < 10)
         count = 10;
+#ifdef MISTER_HYBRID
+    if (!cls.demoplayback) {
+        MiSTer_RumbleHit(blood + armor);
+    }
+#endif
 
     cl.faceanimtime = cl.time + 0.2; // but sbar face into pain frame
 

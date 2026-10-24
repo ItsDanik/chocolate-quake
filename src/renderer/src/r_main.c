@@ -21,6 +21,7 @@
 
 
 #include "r_local.h"
+#include "d_local.h"
 #include "cmd.h"
 #include "console.h"
 #include "screen.h"
@@ -927,6 +928,8 @@ void R_RenderView_(void) {
     }
 
     R_DrawParticles();
+    // all of the view drawn (d_spanjob.c), before the warp and the 2D
+    D_SpanJobsFinish();
 
     if (r_dspeeds.value)
         dp_time2 = Sys_FloatTime();

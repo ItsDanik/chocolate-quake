@@ -28,6 +28,10 @@
 #include "zone.h"
 #include <string.h>
 
+#ifdef MISTER_HYBRID
+#include "mister_port.h"
+#endif
+
 
 void Cmd_ForwardToServer(void);
 
@@ -283,6 +287,13 @@ void Cmd_Exec_f(void) {
     }
     Con_Printf("execing %s\n", Cmd_Argv(1));
 
+#ifdef MISTER_HYBRID
+    // the controller's buttons, after default.cfg (it unbinds all) and
+    // before config.cfg (the player's own bindings)
+    if (!Q_strcasecmp(Cmd_Argv(1), "default.cfg")) {
+        Cbuf_InsertText((char*) MiSTer_PadBindings());
+    }
+#endif
     Cbuf_InsertText(f);
     Hunk_FreeToLowMark(mark);
 }

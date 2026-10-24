@@ -20,6 +20,9 @@
 // cl_parse.c  -- parse a message received from the server
 
 
+#ifdef MISTER_HYBRID
+#include "mister_port.h"
+#endif
 #include "client.h"
 #include "bgmusic.h"
 #include "cmd.h"
@@ -144,6 +147,17 @@ void CL_ParseStartSoundPacket(void) {
 
     S_StartSound(ent, channel, cl.sound_precache[sound_num], pos,
                  volume / 255.0, attenuation);
+#ifdef MISTER_HYBRID
+    // the player landed: land2.wav is the fall that hurts
+    if (ent == cl.viewentity && !cls.demoplayback && cl.sound_precache[sound_num]) {
+        const char* name = cl.sound_precache[sound_num]->name;
+        if (!Q_strcmp(name, "player/land.wav")) {
+            MiSTer_RumbleLand(1);
+        } else if (!Q_strcmp(name, "player/land2.wav")) {
+            MiSTer_RumbleLand(2);
+        }
+    }
+#endif
 }
 
 /*
@@ -494,6 +508,9 @@ void CL_ParseClientdata(i32 bits) {
         cl.idealpitch = 0;
 
     VectorCopy(cl.mvelocity[0], cl.mvelocity[1]);
+#ifdef MISTER_HYBRID
+    float old_punch = cl.punchangle[0];
+#endif
     for (i = 0; i < 3; i++) {
         if (bits & (SU_PUNCH1 << i))
             cl.punchangle[i] = MSG_ReadChar();
@@ -504,6 +521,17 @@ void CL_ParseClientdata(i32 bits) {
         else
             cl.mvelocity[0][i] = 0;
     }
+#ifdef MISTER_HYBRID
+    // a shot kicks the view up (punchangle[0] goes down), the server lets
+    // it come back a degree at a time
+    if (cl.punchangle[0] < old_punch && !cls.demoplayback) {
+        i32 weapon = cl.stats[STAT_ACTIVEWEAPON];
+        // the launchers kick as the shotgun, and are heavier
+        qboolean heavy = !rogue && !hipnotic
+                         && (weapon & (IT_ROCKET_LAUNCHER | IT_GRENADE_LAUNCHER));
+        MiSTer_RumbleShot(heavy ? 4.0f : -cl.punchangle[0]);
+    }
+#endif
 
     // [always sent]	if (bits & SU_ITEMS)
     i = MSG_ReadLong();

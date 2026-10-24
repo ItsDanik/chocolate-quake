@@ -20,6 +20,10 @@
 // host.c -- coordinates spawning and killing of local servers
 
 
+#ifdef MISTER_HYBRID
+#include "mister_port.h"
+void Host_MiSTerCheats(void);
+#endif
 #include "host.h"
 #include "bgmusic.h"
 #include "client.h"
@@ -597,7 +601,15 @@ void _Host_Frame(float time) {
     }
 
     // get new key events
+#ifdef MISTER_HYBRID
+    MiSTer_Mark(MISTER_T_INPUT);
+#endif
     Sys_SendKeyEvents();
+
+#ifdef MISTER_HYBRID
+    // the OSD's cheats, as commands
+    Host_MiSTerCheats();
+#endif
 
     // process console commands
     Cbuf_Execute();
@@ -619,8 +631,14 @@ void _Host_Frame(float time) {
     Host_GetConsoleCommands();
 
     if (sv.active) {
+#ifdef MISTER_HYBRID
+        MiSTer_Mark(MISTER_T_SERVER);
+#endif
         Host_ServerFrame();
     }
+#ifdef MISTER_HYBRID
+    MiSTer_Mark(MISTER_T_CLIENT);
+#endif
 
     //-------------------
     //
@@ -645,7 +663,13 @@ void _Host_Frame(float time) {
     if (host_speeds.value)
         time1 = Sys_FloatTime();
 
+#ifdef MISTER_HYBRID
+    MiSTer_Mark(MISTER_T_RENDER);
+#endif
     SCR_UpdateScreen();
+#ifdef MISTER_HYBRID
+    MiSTer_Mark(MISTER_T_SOUND);
+#endif
 
     if (host_speeds.value) {
         time2 = Sys_FloatTime();
@@ -669,6 +693,9 @@ void _Host_Frame(float time) {
         Con_Printf("%3i tot %3i server %3i gfx %3i snd\n",
                    pass1 + pass2 + pass3, pass1, pass2, pass3);
     }
+#ifdef MISTER_HYBRID
+    MiSTer_Mark(MISTER_T_OTHER);
+#endif
 
     host_framecount++;
 }

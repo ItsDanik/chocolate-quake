@@ -10,6 +10,7 @@ add_library(${LIB} STATIC
     src/d_part.c
     src/d_polyse.c
     src/d_scan.c
+    src/d_spanjob.c
     src/d_sky.c
     src/d_sprite.c
     src/d_surf.c
@@ -55,3 +56,11 @@ target_link_libraries(${LIB} PRIVATE
     status_bar
     sys
 )
+if(MISTER_HYBRID)
+    target_link_libraries(${LIB} PRIVATE mister)
+endif()
+if(UNIX)
+    # the span worker (d_spanjob.c)
+    find_package(Threads REQUIRED)
+    target_link_libraries(${LIB} PRIVATE Threads::Threads)
+endif()

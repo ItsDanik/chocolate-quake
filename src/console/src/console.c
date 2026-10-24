@@ -160,7 +160,7 @@ void Con_CheckResize(void) {
     i32 i, j, width, oldwidth, oldtotallines, numlines, numchars;
     char tbuf[CON_TEXTSIZE];
 
-    width = (vid.width >> 3) - 2;
+    width = (vid.width2d >> 3) - 2;
 
     if (width == con_linewidth)
         return;
@@ -505,7 +505,7 @@ void Con_DrawNotify(void) {
     float time;
     extern char chat_buffer[];
 
-    v = 0;
+    v = vid.hud_top; // the top HUD margin of the MiSTer's 240-line modes
     for (i = con_current - NUM_CON_TIMES + 1; i <= con_current; i++) {
         if (i < 0)
             continue;

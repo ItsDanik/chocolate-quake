@@ -24,6 +24,9 @@
 
 #include "d_local.h"
 #include "r_local.h"
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
 
 
 byte *r_turb_pbase, *r_turb_pdest;
@@ -234,124 +237,173 @@ void Turbulent8(espan_t* pspan) {
 /*
 =============
 D_DrawSpans8
+
+The same pixels as id's C version, faster on the MiSTer's ARM: the globals in
+registers (a byte store could change them, so the compiler loaded cachewidth
+again for every pixel), the divide for the next 8 pixels started before
+these are drawn (the floating point unit works on it meanwhile, as DOS
+Quake's assembly did with the FPU), and the step of a span's last piece taken
+by multiplication (the Cortex-A9 has no integer division).
 =============
 */
+
 void D_DrawSpans8(espan_t* pspan) {
-    i32 count, spancount;
-    byte *pbase, *pdest;
-    fixed16_t s, t, snext, tnext, sstep, tstep;
-    float sdivz, tdivz, zi, z, du, dv, spancountminus1;
-    float sdivz8stepu, tdivz8stepu, zi8stepu;
+    d_spanjob_t job;
 
-    sstep = 0; // keep compiler happy
-    tstep = 0; // ditto
+    job.spans = pspan;
+    job.cache = NULL;
+    job.cacheblock = (const byte*) cacheblock;
+    job.cachewidth = cachewidth;
+    job.sdivzorigin = d_sdivzorigin;
+    job.tdivzorigin = d_tdivzorigin;
+    job.ziorigin = d_ziorigin;
+    job.sdivzstepu = d_sdivzstepu;
+    job.tdivzstepu = d_tdivzstepu;
+    job.zistepu = d_zistepu;
+    job.sdivzstepv = d_sdivzstepv;
+    job.tdivzstepv = d_tdivzstepv;
+    job.zistepv = d_zistepv;
+    job.sadjust = sadjust;
+    job.tadjust = tadjust;
+    job.bbextents = bbextents;
+    job.bbextentt = bbextentt;
+    D_DrawSpans8Job(&job);
+}
 
-    pbase = (byte*) cacheblock;
-
-    sdivz8stepu = d_sdivzstepu * 8;
-    tdivz8stepu = d_tdivzstepu * 8;
-    zi8stepu = d_zistepu * 8;
+// D_DrawSpans8 with its inputs in a job, so that it can run on another CPU
+// (d_spanjob.c). The view buffer and its width do not change while spans
+// are drawn.
+void D_DrawSpans8Job(const d_spanjob_t* job) {
+    espan_t* pspan = job->spans;
+    const byte* const pbase = job->cacheblock;
+    const i32 cw = job->cachewidth;
+    const i32 width = screenwidth;
+    byte* const viewbuffer = (byte*) d_viewbuffer;
+    const fixed16_t sadj = job->sadjust, tadj = job->tadjust;
+    const fixed16_t bbs = job->bbextents, bbt = job->bbextentt;
+    const float sdivzorigin = job->sdivzorigin, tdivzorigin = job->tdivzorigin;
+    const float ziorigin = job->ziorigin;
+    const float sdivzstepu = job->sdivzstepu, tdivzstepu = job->tdivzstepu;
+    const float zistepu = job->zistepu;
+    const float sdivzstepv = job->sdivzstepv, tdivzstepv = job->tdivzstepv;
+    const float zistepv = job->zistepv;
+    const float sdivz8stepu = sdivzstepu * 8;
+    const float tdivz8stepu = tdivzstepu * 8;
+    const float zi8stepu = zistepu * 8;
 
     do {
-        pdest = (byte*) ((byte*) d_viewbuffer + (screenwidth * pspan->v) + pspan->u);
-
-        count = pspan->count;
+        byte* pdest = viewbuffer + (width * pspan->v) + pspan->u;
+        i32 count = pspan->count;
 
         // calculate the initial s/z, t/z, 1/z, s, and t and clamp
-        du = (float) pspan->u;
-        dv = (float) pspan->v;
+        float du = (float) pspan->u;
+        float dv = (float) pspan->v;
+        float sdivz = sdivzorigin + dv * sdivzstepv + du * sdivzstepu;
+        float tdivz = tdivzorigin + dv * tdivzstepv + du * tdivzstepu;
+        float zi = ziorigin + dv * zistepv + du * zistepu;
+        float z = (float) 0x10000 / zi; // prescale to 16.16 fixed-point
 
-        sdivz = d_sdivzorigin + dv * d_sdivzstepv + du * d_sdivzstepu;
-        tdivz = d_tdivzorigin + dv * d_tdivzstepv + du * d_tdivzstepu;
-        zi = d_ziorigin + dv * d_zistepv + du * d_zistepu;
-        z = (float) 0x10000 / zi; // prescale to 16.16 fixed-point
-
-        s = (i32) (sdivz * z) + sadjust;
-        if (s > bbextents)
-            s = bbextents;
+        fixed16_t s = (i32) (sdivz * z) + sadj;
+        if (s > bbs)
+            s = bbs;
         else if (s < 0)
             s = 0;
-
-        t = (i32) (tdivz * z) + tadjust;
-        if (t > bbextentt)
-            t = bbextentt;
+        fixed16_t t = (i32) (tdivz * z) + tadj;
+        if (t > bbt)
+            t = bbt;
         else if (t < 0)
             t = 0;
 
-        do {
-            // calculate s and t at the far end of the span
-            if (count >= 8)
-                spancount = 8;
-            else
-                spancount = count;
+        // 1/z at the far end of the first piece: 8 pixels on, or the last
+        // pixel of a shorter span
+        i32 spancount = count >= 8 ? 8 : count;
+        count -= spancount;
+        if (count) {
+            sdivz += sdivz8stepu;
+            tdivz += tdivz8stepu;
+            zi += zi8stepu;
+        } else {
+            float spancountminus1 = (float) (spancount - 1);
+            sdivz += sdivzstepu * spancountminus1;
+            tdivz += tdivzstepu * spancountminus1;
+            zi += zistepu * spancountminus1;
+        }
+        z = (float) 0x10000 / zi;
 
-            count -= spancount;
-
+        for (;;) {
+            fixed16_t snext = D_SpanClamp(sdivz * z, sadj, bbs);
+            fixed16_t tnext = D_SpanClamp(tdivz * z, tadj, bbt);
+            fixed16_t sstep, tstep;
             if (count) {
-                // calculate s/z, t/z, zi->fixed s and t at far end of span,
-                // calculate s and t steps across span by shifting
-                sdivz += sdivz8stepu;
-                tdivz += tdivz8stepu;
-                zi += zi8stepu;
-                z = (float) 0x10000 / zi; // prescale to 16.16 fixed-point
-
-                snext = (i32) (sdivz * z) + sadjust;
-                if (snext > bbextents)
-                    snext = bbextents;
-                else if (snext < 8)
-                    snext = 8; // prevent round-off error on <0 steps from
-                        //  from causing overstepping & running off the
-                        //  edge of the texture
-
-                tnext = (i32) (tdivz * z) + tadjust;
-                if (tnext > bbextentt)
-                    tnext = bbextentt;
-                else if (tnext < 8)
-                    tnext = 8; // guard against round-off error on <0 steps
-
                 sstep = (snext - s) >> 3;
                 tstep = (tnext - t) >> 3;
             } else {
-                // calculate s/z, t/z, zi->fixed s and t at last pixel in span (so
-                // can't step off polygon), clamp, calculate s and t steps across
-                // span by division, biasing steps low so we don't run off the
-                // texture
-                spancountminus1 = (float) (spancount - 1);
-                sdivz += d_sdivzstepu * spancountminus1;
-                tdivz += d_tdivzstepu * spancountminus1;
-                zi += d_zistepu * spancountminus1;
-                z = (float) 0x10000 / zi; // prescale to 16.16 fixed-point
-                snext = (i32) (sdivz * z) + sadjust;
-                if (snext > bbextents)
-                    snext = bbextents;
-                else if (snext < 8)
-                    snext = 8; // prevent round-off error on <0 steps from
-                        //  from causing overstepping & running off the
-                        //  edge of the texture
-
-                tnext = (i32) (tdivz * z) + tadjust;
-                if (tnext > bbextentt)
-                    tnext = bbextentt;
-                else if (tnext < 8)
-                    tnext = 8; // guard against round-off error on <0 steps
-
-                if (spancount > 1) {
-                    sstep = (snext - s) / (spancount - 1);
-                    tstep = (tnext - t) / (spancount - 1);
-                }
+                // biased low so as not to run off the texture
+                sstep = spancount > 1 ? D_SpanStep(snext - s, spancount - 1) : 0;
+                tstep = spancount > 1 ? D_SpanStep(tnext - t, spancount - 1) : 0;
             }
 
-            do {
-                *pdest++ = *(pbase + (s >> 16) + (t >> 16) * cachewidth);
+            // the next piece's far end, divided while these pixels are drawn
+            i32 nextcount = 0;
+            if (count) {
+                nextcount = count >= 8 ? 8 : count;
+                count -= nextcount;
+                if (count) {
+                    sdivz += sdivz8stepu;
+                    tdivz += tdivz8stepu;
+                    zi += zi8stepu;
+                } else {
+                    float spancountminus1 = (float) (nextcount - 1);
+                    sdivz += sdivzstepu * spancountminus1;
+                    tdivz += tdivzstepu * spancountminus1;
+                    zi += zistepu * spancountminus1;
+                }
+                z = (float) 0x10000 / zi;
+#if defined(__arm__)
+                // here, not after the pixels where it is used
+                __asm__("" : "+w"(z));
+#endif
+            }
+
+            if (spancount == 8) {
+                pdest[0] = pbase[(s >> 16) + (t >> 16) * cw];
                 s += sstep;
                 t += tstep;
-            } while (--spancount > 0);
+                pdest[1] = pbase[(s >> 16) + (t >> 16) * cw];
+                s += sstep;
+                t += tstep;
+                pdest[2] = pbase[(s >> 16) + (t >> 16) * cw];
+                s += sstep;
+                t += tstep;
+                pdest[3] = pbase[(s >> 16) + (t >> 16) * cw];
+                s += sstep;
+                t += tstep;
+                pdest[4] = pbase[(s >> 16) + (t >> 16) * cw];
+                s += sstep;
+                t += tstep;
+                pdest[5] = pbase[(s >> 16) + (t >> 16) * cw];
+                s += sstep;
+                t += tstep;
+                pdest[6] = pbase[(s >> 16) + (t >> 16) * cw];
+                s += sstep;
+                t += tstep;
+                pdest[7] = pbase[(s >> 16) + (t >> 16) * cw];
+                pdest += 8;
+            } else {
+                do {
+                    *pdest++ = pbase[(s >> 16) + (t >> 16) * cw];
+                    s += sstep;
+                    t += tstep;
+                } while (--spancount > 0);
+            }
 
+            if (!nextcount) {
+                break;
+            }
             s = snext;
             t = tnext;
-
-        } while (count > 0);
-
+            spancount = nextcount;
+        }
     } while ((pspan = pspan->pnext) != NULL);
 }
 
@@ -361,6 +413,11 @@ D_DrawZSpans
 =============
 */
 void D_DrawZSpans(espan_t* pspan) {
+    D_DrawZSpansAt(pspan, d_ziorigin, d_zistepu, d_zistepv);
+}
+
+// D_DrawZSpans with the gradients as arguments (d_spanjob.c)
+void D_DrawZSpansAt(espan_t* pspan, float ziorigin, float zistepu, float zistepv) {
     i32 count, doublecount, izistep;
     i32 izi;
     i16* pdest;
@@ -370,7 +427,7 @@ void D_DrawZSpans(espan_t* pspan) {
 
     // FIXME: check for clamping/range problems
     // we count on FP exceptions being turned off to avoid range problems
-    izistep = (i32) (d_zistepu * 0x8000 * 0x10000);
+    izistep = (i32) (zistepu * 0x8000 * 0x10000);
 
     do {
         pdest = d_pzbuffer + (d_zwidth * pspan->v) + pspan->u;
@@ -381,7 +438,7 @@ void D_DrawZSpans(espan_t* pspan) {
         du = (float) pspan->u;
         dv = (float) pspan->v;
 
-        zi = d_ziorigin + dv * d_zistepv + du * d_zistepu;
+        zi = ziorigin + dv * zistepv + du * zistepu;
         // we count on FP exceptions being turned off to avoid range problems
         izi = (i32) (zi * 0x8000 * 0x10000);
 
@@ -391,6 +448,25 @@ void D_DrawZSpans(espan_t* pspan) {
             count--;
         }
 
+#if defined(__ARM_NEON)
+        // eight at a time on the MiSTer's NEON: the same values, as the
+        // high halves of izi, izi + izistep, ...
+        if (count >= 8) {
+            const u32 ustep = (u32) izistep;
+            const int32x4_t step8 = vdupq_n_s32((i32) (ustep * 8));
+            int32x4_t lo = {izi, (i32) ((u32) izi + ustep), (i32) ((u32) izi + ustep * 2),
+                            (i32) ((u32) izi + ustep * 3)};
+            int32x4_t hi = vaddq_s32(lo, vdupq_n_s32((i32) (ustep * 4)));
+            do {
+                vst1q_s16(pdest, vcombine_s16(vshrn_n_s32(lo, 16), vshrn_n_s32(hi, 16)));
+                lo = vaddq_s32(lo, step8);
+                hi = vaddq_s32(hi, step8);
+                pdest += 8;
+                count -= 8;
+            } while (count >= 8);
+            izi = vgetq_lane_s32(lo, 0);
+        }
+#endif
         if ((doublecount = count >> 1) > 0) {
             do {
                 ltemp = izi >> 16;
