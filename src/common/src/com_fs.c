@@ -225,6 +225,62 @@ static void COM_CopyFile(char* netpath, char* cachepath) {
     Sys_FileClose(out);
 }
 
+#ifdef MISTER_HYBRID
+/*
+Copies of Quake from its CD or a shop have ID1/PAK0.PAK as often as
+id1/pak0.pak, and the MiSTer's file systems tell them apart. The last part
+of `path`, when there is no such file, is looked for in any case and
+replaced with the name it has.
+*/
+static void COM_FindCase(char* path) {
+    struct stat st;
+    if (stat(path, &st) == 0) {
+        return;
+    }
+    char* name = strrchr(path, '/');
+    if (!name) {
+        return;
+    }
+    *name = 0;
+    DIR* dir = opendir(path[0] ? path : "/");
+    *name++ = '/';
+    if (!dir) {
+        return;
+    }
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (!Q_strcasecmp(entry->d_name, name)) {
+            Q_strcpy(name, entry->d_name);
+            break;
+        }
+    }
+    closedir(dir);
+}
+
+/*
+A file in a game's folder, `filename` under `dir`, looked for in any case
+one part of its path at a time (MUSIC/TRACK02.OGG as music/track02.ogg):
+`path` is the name it has, or as far as it was found.
+*/
+static void COM_FindPathCase(const char* dir, const char* filename, char* path) {
+    i32 len = Q_strlen(dir);
+    Q_strcpy(path, dir);
+    while (*filename && len < MAX_OSPATH - 2) {
+        const char* end = Q_strchr(filename, '/');
+        i32 n = end ? (i32) (end - filename) : Q_strlen(filename);
+        if (len + 1 + n >= MAX_OSPATH) {
+            break;
+        }
+        path[len++] = '/';
+        memcpy(path + len, filename, n);
+        len += n;
+        path[len] = 0;
+        COM_FindCase(path);
+        filename += end ? n + 1 : n;
+    }
+}
+#endif
+
 /*
 ============
 COM_SearchDir
@@ -244,6 +300,12 @@ static qboolean COM_SearchDir(
 
     sprintf(netpath, "%s/%s", search->filename, filename);
     i32 findtime = Sys_FileTime(netpath);
+#ifdef MISTER_HYBRID
+    if (findtime == -1) {
+        COM_FindPathCase(search->filename, filename, netpath);
+        findtime = Sys_FileTime(netpath);
+    }
+#endif
     if (findtime == -1) {
         return false;
     }
@@ -648,39 +710,6 @@ Sets com_gamedir, adds the directory to the head of the path,
 then loads and adds pak1.pak, pak2.pak, ...
 ================
 */
-#ifdef MISTER_HYBRID
-/*
-Copies of Quake from its CD or a shop have ID1/PAK0.PAK as often as
-id1/pak0.pak, and the MiSTer's file systems tell them apart. The last part
-of `path`, when there is no such file, is looked for in any case and
-replaced with the name it has.
-*/
-static void COM_FindCase(char* path) {
-    struct stat st;
-    if (stat(path, &st) == 0) {
-        return;
-    }
-    char* name = strrchr(path, '/');
-    if (!name) {
-        return;
-    }
-    *name = 0;
-    DIR* dir = opendir(path[0] ? path : "/");
-    *name++ = '/';
-    if (!dir) {
-        return;
-    }
-    struct dirent* entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (!Q_strcasecmp(entry->d_name, name)) {
-            Q_strcpy(name, entry->d_name);
-            break;
-        }
-    }
-    closedir(dir);
-}
-#endif
-
 static void COM_AddGameDirectory(char* dir) {
     char pakfile[MAX_OSPATH];
 
