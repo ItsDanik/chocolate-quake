@@ -54,17 +54,17 @@ static qboolean UDP_IsLocalAddr(const IPaddress* addr) {
     return addr->host == 0 || SDLNet_Read32(&addr->host) == INADDR_LOOPBACK;
 }
 
-static void UDP_FindLocalAddr(void) {
+static qboolean UDP_FindLocalAddr(void) {
     IPaddress addrs[10] = {0};
     const i32 count = SDL_arraysize(addrs);
     SDLNet_GetLocalAddresses(addrs, count);
     for (i32 i = 0; i < count; i++) {
         if (!UDP_IsLocalAddr(&addrs[i])) {
             my_addr = addrs[i];
-            return;
+            return true;
         }
     }
-    Sys_Error("UDP_FindLocalAddr: Couldn't determine local address.");
+    return false;
 }
 
 qboolean UDP_IsInitialized(void) {
@@ -88,8 +88,13 @@ void UDP_Init(void) {
         return;
     }
 
-    // Determine my name and address.
-    UDP_FindLocalAddr();
+    // Determine my name and address. Without a network (no cable, no
+    // Wi-Fi) the game runs without TCP/IP, as with -noudp.
+    if (!UDP_FindLocalAddr()) {
+        Con_Printf("UDP_Init: no network address, TCP/IP not available\n");
+        SDLNet_Quit();
+        return;
+    }
 
     // if the quake hostname isn't set, set it to the machine name
     if (Q_strcmp(hostname.string, "UNNAMED") == 0) {
